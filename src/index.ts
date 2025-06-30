@@ -50,11 +50,11 @@ async function connectToAgent() {
         audio: {
           input: {
             encoding: 'linear16',
-            sample_rate: 24000
+            sample_rate: 32000
           },
           output: {
             encoding: 'linear16',
-            sample_rate: 24000,
+            sample_rate: 32000,
             container: 'none'
           }
         },
@@ -84,7 +84,7 @@ Remember that you have a voice interface. You can listen and speak, and all your
           speak: {
             provider: {
               type: 'deepgram',
-              model: 'aura-2-thalia-en'
+              model: 'aura-arcas-en'
             }
           },
           greeting: "Hello! How can I help you today?"
@@ -147,6 +147,7 @@ wss.on('connection', async (ws) => {
 
   ws.on('message', (data: Buffer) => {
     try {
+      console.log(`Received audio data from browser: ${data.length} bytes`);
       if (agent) {
         agent.send(data);
       }

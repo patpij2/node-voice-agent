@@ -9,6 +9,15 @@
     <h1>Deepgram Voice Agent Browser Demo</h1>
     <p>This is a demo of the Deepgram Voice Agent. It uses the <a href="https://developers.deepgram.com/reference/voice-agent-api/agent">Deepgram Voice Agent API</a>.</p>
     <p>Please enable your microphone in the browser to start the conversation.</p>
+    
+    <div id="status" style="padding: 10px; margin: 10px 0; border: 1px solid #ccc; background: #f9f9f9;">
+        <strong>Status:</strong> <span id="statusText">Initializing...</span>
+    </div>
+    
+    <button id="testMic" style="padding: 10px; margin: 10px 0; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+        Test Microphone
+    </button>
+    
     <script>
         let socket;
         let mediaStream;
@@ -19,11 +28,21 @@
         let isPlaying = false; // Flag to track if we're currently playing audio
         let selectedDeviceId;
 
+        function updateStatus(message) {
+            const statusText = document.getElementById('statusText');
+            if (statusText) {
+                statusText.textContent = message;
+            }
+            console.log('Status:', message);
+        }
+
         async function init() {
             try {
+                updateStatus('Getting microphone permission...');
+                
                 // Create audio context early
                 audioContext = new AudioContext({
-                    sampleRate: 24000 // Match the highest sample rate we'll use
+                    sampleRate: 32000 // Match the server sample rate for better quality
                 });
 
                 // Get microphone permission with specific constraints
@@ -31,7 +50,7 @@
                     audio: {
                         deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
                         channelCount: 1,
-                        sampleRate: 24000,
+                        sampleRate: 32000,
                         echoCancellation: false,  // Can be toggled
                         noiseSuppression: false,  // Can be toggled
                         autoGainControl: false,   // Can be toggled
@@ -44,11 +63,14 @@
                     }
                 };
                 mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+                updateStatus('Microphone access granted, connecting to server...');
 
                 // Connect to WebSocket server
                 socket = new WebSocket('ws://localhost:3000');
 
                 socket.onopen = () => {
+                    updateStatus('Connected to server, starting audio stream...');
+                    console.log('WebSocket connected, starting audio stream...');
                     isConnected = true;
                     startStreaming();
                 };
@@ -96,12 +118,11 @@
             // Worklet processor for better performance
             const processor = audioContext.createScriptProcessor(2048, 1, 1);
 
-            // Connect the chain
+            // Connect the chain (but don't connect to destination to avoid feedback)
             source
                 .connect(gainNode)
                 .connect(analyser)
-                .connect(processor)
-                .connect(audioContext.destination);
+                .connect(processor);
 
             return { gainNode, analyser, processor };
         }
@@ -110,29 +131,75 @@
             if (!mediaStream || !isConnected) return;
 
             try {
+                console.log('Starting audio stream...');
+                updateStatus('Starting audio stream...');
+                
+                // Ensure audio context is running
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume().then(() => {
+                        console.log('Audio context resumed');
+                        updateStatus('Audio context resumed, ready to speak!');
+                    });
+                } else {
+                    updateStatus('Ready to speak!');
+                }
+
                 const source = audioContext.createMediaStreamSource(mediaStream);
+                console.log('MediaStreamSource created');
 
                 // Create a worklet for better audio processing
                 const bufferSize = 2048;
                 processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+                console.log('ScriptProcessor created with buffer size:', bufferSize);
 
                 source.connect(processor);
-                processor.connect(audioContext.destination);
+                console.log('Source connected to processor');
+
+                // Create a dummy destination to make the processor work (gain = 0 so no audio output)
+                const dummyGain = audioContext.createGain();
+                dummyGain.gain.value = 0;
+                processor.connect(dummyGain);
+                dummyGain.connect(audioContext.destination);
+                console.log('Processor connected to dummy destination');
 
                 let lastSendTime = 0;
-                const sendInterval = 100; // Send every 100ms
+                const sendInterval = 50; // Send more frequently (every 50ms)
+                let audioSent = false;
+                let processCount = 0;
 
                 processor.onaudioprocess = (e) => {
+                    processCount++;
+                    console.log(`Audio process triggered #${processCount}`);
+                    
                     const now = Date.now();
                     if (socket?.readyState === WebSocket.OPEN && now - lastSendTime >= sendInterval) {
                         const inputData = e.inputBuffer.getChannelData(0);
+                        // Log the first 10 samples for debugging
+                        if (!audioSent) {
+                            console.log('Mic data (first 10 samples):', Array.from(inputData.slice(0, 10)));
+                        }
+                        // Always send audio, regardless of silence
                         const pcmData = convertFloatToPcm(inputData);
-                        socket.send(pcmData.buffer);
-                        lastSendTime = now;
+                        try {
+                            socket.send(pcmData.buffer);
+                            if (!audioSent) {
+                                console.log('First audio packet sent');
+                                updateStatus('Audio streaming active - speak now!');
+                                audioSent = true;
+                            }
+                            // Log every send for debugging
+                            console.log('Audio packet sent, sample[0]:', inputData[0]);
+                            lastSendTime = now;
+                        } catch (error) {
+                            console.error('Error sending audio:', error);
+                        }
                     }
                 };
+                
+                console.log('Audio streaming started');
             } catch (error) {
                 console.error('Error starting audio stream:', error);
+                updateStatus('Error starting audio stream: ' + error.message);
             }
         }
 
@@ -160,8 +227,8 @@
                     await audioContext.resume();
                 }
 
-                // Create buffer with correct sample rate for agent's audio (24000Hz)
-                const buffer = audioContext.createBuffer(1, audioData.length, 24000);
+                // Create buffer with correct sample rate for agent's audio (32000Hz)
+                const buffer = audioContext.createBuffer(1, audioData.length, 32000);
                 const channelData = buffer.getChannelData(0);
 
                 // Convert Int16 to Float32 with proper scaling
@@ -176,10 +243,26 @@
 
                 // Create a gain node for volume control
                 const gainNode = audioContext.createGain();
-                gainNode.gain.value = 1.0; // Adjust volume if needed
+                gainNode.gain.value = 0.9; // Slightly reduce volume to avoid clipping
 
-                // Connect nodes
-                source.connect(gainNode);
+                // Create a low-pass filter to smooth out harsh frequencies
+                const lowpassFilter = audioContext.createBiquadFilter();
+                lowpassFilter.type = 'lowpass';
+                lowpassFilter.frequency.value = 8000; // Cut off harsh high frequencies
+                lowpassFilter.Q.value = 0.5; // Gentle rolloff
+
+                // Create a compressor to smooth out dynamics
+                const compressor = audioContext.createDynamicsCompressor();
+                compressor.threshold.value = -24;
+                compressor.knee.value = 30;
+                compressor.ratio.value = 12;
+                compressor.attack.value = 0.003;
+                compressor.release.value = 0.25;
+
+                // Connect nodes for better audio quality
+                source.connect(lowpassFilter);
+                lowpassFilter.connect(compressor);
+                compressor.connect(gainNode);
                 gainNode.connect(audioContext.destination);
 
                 // Handle playback completion
@@ -236,6 +319,40 @@
 
         // Initialize when the page loads
         window.onload = init;
+
+        // Add microphone test functionality
+        document.getElementById('testMic').addEventListener('click', async () => {
+            try {
+                updateStatus('Testing microphone...');
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const audioContext = new AudioContext();
+                const source = audioContext.createMediaStreamSource(stream);
+                const analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
+                
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+                let testCount = 0;
+                
+                const testInterval = setInterval(() => {
+                    analyser.getByteFrequencyData(dataArray);
+                    const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                    console.log(`Mic test ${testCount}: Average level = ${average}`);
+                    updateStatus(`Mic test ${testCount}: Level = ${average}`);
+                    testCount++;
+                    
+                    if (testCount >= 10) {
+                        clearInterval(testInterval);
+                        stream.getTracks().forEach(track => track.stop());
+                        updateStatus('Microphone test complete. Check console for levels.');
+                    }
+                }, 500);
+                
+            } catch (error) {
+                console.error('Microphone test failed:', error);
+                updateStatus('Microphone test failed: ' + error.message);
+            }
+        });
 
         // Clean up when the page is closed
         window.onbeforeunload = () => {
