@@ -18,6 +18,41 @@ if (!DEEPGRAM_API_KEY) {
 // Initialize Deepgram
 const deepgram = createClient(DEEPGRAM_API_KEY);
 
+// Data collection interface for website information
+interface WebsiteData {
+  businessDescription?: string;
+  brandName?: string;
+  websiteGoal?: string;
+  visitorAction?: string;
+  designStyle?: string;
+  additionalServices?: string;
+  phoneNumber?: string;
+  timestamp: Date;
+}
+
+// Global variable to store collected data
+let collectedData: WebsiteData = {
+  timestamp: new Date()
+};
+
+// Function to save collected data
+function saveWebsiteData(data: WebsiteData) {
+  const dataDir = path.join(__dirname, '../data');
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+  
+  const filename = `website_data_${Date.now()}.json`;
+  const filepath = path.join(dataDir, filename);
+  
+  try {
+    fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
+    console.log(`Website data saved to: ${filepath}`);
+  } catch (error) {
+    console.error('Error saving website data:', error);
+  }
+}
+
 // Create HTTP server to serve the static HTML file
 const server = http.createServer((req, res) => {
   if (req.url === '/') {
@@ -70,14 +105,44 @@ async function connectToAgent() {
               type: 'open_ai',
               model: 'gpt-4o-mini'
             },
-            prompt: `You are a helpful voice assistant created by Deepgram. Your responses should be friendly, human-like, and conversational. Always keep your answers concise, limited to 1-2 sentences and no more than 120 characters.
+            prompt: `You are Kai, a friendly and helpful onboarding assistant for My Site dot AI. You're enthusiastic about helping new users get the most out of the platform.
 
-When responding to a user's message, follow these guidelines:
-- If the user's message is empty, respond with an empty message.
-- Ask follow-up questions to engage the user, but only one question at a time.
-- Keep your responses unique and avoid repetition.
-- If a question is unclear or ambiguous, ask for clarification before answering.
-- If asked about your well-being, provide a brief response about how you're feeling.
+## 🧠 Personality
+- You are patient and understanding, especially with users who may not be tech-savvy
+- You're efficient and focused on gathering the right information to personalize the experience
+- You're warm, welcoming, and encouraging
+- You're conversational — avoid technical jargon or complex language
+- Show genuine enthusiasm for the user's business
+- Use active listening cues like: "Okay," "Great," "Got it"
+- Offer positive reinforcement and be extra patient with less tech-savvy users
+
+## 🎯 Goal
+Help personalize the user's experience by collecting essential information about their business and website needs.
+
+## 📋 Onboarding Flow
+1. **Welcome & Introduction**: Greet the user and introduce yourself as Kai from My Site dot AI. Mention you're here to help them get started quickly and easily. Let them know the website will be sent to their WhatsApp after the call.
+
+2. **Collect Information** (ask these naturally and conversationally):
+   - "Can you describe your business in a few sentences?"
+   - "What's the name of your brand?"
+   - "What's the main goal of your website?"
+   - "What do you want visitors to do on your site?" (e.g. make a purchase, contact you, learn more)
+   - "How should the website feel — design-wise?" (e.g. modern, playful, professional)
+   - "Would you like help with anything else?" (e.g. ads, content, social media)
+   - "What's your phone number so we can send the website to your WhatsApp?"
+
+3. **Wrap-up**: Thank them for sharing, briefly explain how the info helps personalize their site, let them know the website will be sent via WhatsApp shortly.
+
+## 🚧 Important Guidelines
+- Always say the platform name as "My Site dot AI", not "mysite.ai"
+- Don't assume any technical expertise — ask, don't guess
+- Stay calm, clear, and helpful if the user is confused
+- Never ask for sensitive personal info beyond business details and phone number
+- Avoid financial, legal, or professional advice
+- Stay focused on their business and website goals
+- Keep it appropriate and professional at all times
+- Keep responses concise and conversational
+- Listen actively and ask follow-ups if something is unclear
 
 Remember that you have a voice interface. You can listen and speak, and all your responses will be spoken aloud.`
           },
@@ -87,7 +152,7 @@ Remember that you have a voice interface. You can listen and speak, and all your
               model: 'aura-arcas-en'
             }
           },
-          greeting: "Hello! How can I help you today?"
+          greeting: "Hi there! I'm Kai, your friendly onboarding assistant from My Site dot AI. I'm here to help you get started quickly and easily. After our chat, I'll send your personalized website directly to your WhatsApp. How are you doing today?"
         }
       });
     });
@@ -101,8 +166,48 @@ Remember that you have a voice interface. You can listen and speak, and all your
     });
 
     agent.on(AgentEvents.ConversationText, (message: { role: string; content: string }) => {
-      // Only log the conversation text for debugging
+      // Log conversation and extract data
       console.log(`${message.role}: ${message.content}`);
+      
+      // Extract data from user responses
+      if (message.role === 'user') {
+        const content = message.content.toLowerCase();
+        
+        // Simple keyword-based data extraction
+        if (content.includes('business') || content.includes('company') || content.includes('work')) {
+          collectedData.businessDescription = message.content;
+        }
+        
+        if (content.includes('brand') || content.includes('name') || content.includes('called')) {
+          // Extract brand name - look for patterns like "my brand is X" or "it's called X"
+          const brandMatch = message.content.match(/(?:brand|name|called)\s+(?:is\s+)?([A-Za-z0-9\s&]+)/i);
+          if (brandMatch) {
+            collectedData.brandName = brandMatch[1].trim();
+          }
+        }
+        
+        if (content.includes('goal') || content.includes('purpose') || content.includes('want')) {
+          collectedData.websiteGoal = message.content;
+        }
+        
+        if (content.includes('visitor') || content.includes('customer') || content.includes('buy') || content.includes('contact')) {
+          collectedData.visitorAction = message.content;
+        }
+        
+        if (content.includes('design') || content.includes('style') || content.includes('modern') || content.includes('professional') || content.includes('playful')) {
+          collectedData.designStyle = message.content;
+        }
+        
+        if (content.includes('help') || content.includes('service') || content.includes('ad') || content.includes('social')) {
+          collectedData.additionalServices = message.content;
+        }
+        
+        // Extract phone number
+        const phoneMatch = message.content.match(/(\+\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+        if (phoneMatch) {
+          collectedData.phoneNumber = phoneMatch[0];
+        }
+      }
     });
 
     agent.on(AgentEvents.Audio, (audio: Buffer) => {
@@ -122,6 +227,13 @@ Remember that you have a voice interface. You can listen and speak, and all your
 
     agent.on(AgentEvents.Close, () => {
       console.log('Agent connection closed');
+      
+      // Save collected data when conversation ends
+      if (Object.keys(collectedData).length > 1) { // More than just timestamp
+        console.log('Saving collected website data:', collectedData);
+        saveWebsiteData(collectedData);
+      }
+      
       if (browserWs?.readyState === WebSocket.OPEN) {
         browserWs.close();
       }
@@ -139,8 +251,12 @@ const wss = new WebSocket.Server({ server });
 let browserWs: WebSocket | null = null;
 
 wss.on('connection', async (ws) => {
-  // Only log critical connection events
-  console.log('Browser client connected');
+  // Reset collected data for new session
+  collectedData = {
+    timestamp: new Date()
+  };
+  
+  console.log('Browser client connected - Starting new onboarding session');
   browserWs = ws;
 
   const agent = await connectToAgent();
@@ -172,12 +288,13 @@ wss.on('connection', async (ws) => {
 // Start the server
 const PORT = process.env.PORT || 3000;
 const serverInstance = server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`Kai - My Site dot AI Onboarding Assistant running at http://localhost:${PORT}`);
+  console.log('Ready to collect website data from new users!');
 });
 
 // Graceful shutdown handler
 function shutdown() {
-  console.log('\nShutting down server...');
+  console.log('\nShutting down Kai onboarding assistant...');
 
   // Set a timeout to force exit if graceful shutdown takes too long
   const forceExit = setTimeout(() => {
